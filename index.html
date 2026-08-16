@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Minimal Habit Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #09090b; color: #fafafa; }
+        @keyframes pop { 0% { transform: scale(1);} 50% { transform: scale(1.25);} 100% { transform: scale(1);} }
+        .animate-pop { animation: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #09090b; }
+        ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Roboto Mono', 'Segoe UI Mono', monospace; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
+
+    <div class="w-full max-w-2xl bg-zinc-900/55 border border-zinc-800/80 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl">
+
+        <!-- Header -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-zinc-800/80">
+            <div>
+                <h1 class="text-2xl font-semibold tracking-tight text-zinc-100">Daily Execution</h1>
+                <p id="current-date" class="text-sm text-zinc-400 mt-1">Loading date...</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="bg-zinc-800/60 border border-zinc-700/50 px-3 py-1.5 rounded-xl text-xs font-medium text-zinc-300 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span id="completion-rate">0/5 Completed</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Habits List -->
+        <div id="habits-container" class="space-y-4 mb-4"></div>
+
+        <!-- Footer / Data Management Controls -->
+        <div class="mt-4 pt-4 border-t border-zinc-800/40 flex flex-col gap-4">
+            <div class="flex items-center justify-between text-xs text-zinc-500">
+                <span>Streaks reset automatically if a day is missed. Backups include a schema version.</span>
+
+                <div class="flex items-center gap-2">
+                    <button onclick="exportData()" class="px-3 py-1.5 rounded-lg bg-zinc-800/60 border border-zinc-700/50 hover:bg-zinc-800 text-zinc-300 transition-colors cursor-pointer font-medium">Export Backup</button>
+
+                    <button onclick="document.getElementById('import-file').click()" class="px-3 py-1.5 rounded-lg bg-zinc-800/60 border border-zinc-700/50 hover:bg-zinc-800 text-zinc-300 transition-colors cursor-pointer font-medium">Import Backup</button>
+                    <input type="file" id="import-file" accept=".json" class="hidden" onchange="importData(event)">
+                </div>
+            </div>
+
+            <!-- GitHub Sync Section -->
+            <div class="mt-2 p-4 rounded-lg bg-zinc-800/20 border border-zinc-800/70">
+                <h2 class="text-sm font-medium text-zinc-200 mb-2">GitHub Backup / Sync</h2>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
+                    <input id="gh-owner" placeholder="owner" class="px-2 py-1 rounded bg-zinc-900/60 border border-zinc-700/50 text-xs mono" />
+                    <input id="gh-repo" placeholder="repo" class="px-2 py-1 rounded bg-zinc-900/60 border border-zinc-700/50 text-xs mono" />
+                    <input id="gh-path" placeholder="path (e.g. backups/habits.json)" class="px-2 py-1 rounded bg-zinc-900/60 border border-zinc-700/50 text-xs mono" value="backups/habits_backup.json" />
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                    <input id="gh-token" type="password" placeholder="Personal Access Token (scopes: repo)" class="px-2 py-1 rounded bg-zinc-900/60 border border-zinc-700/50 text-xs mono" />
+                    <select id="sync-strategy" class="px-2 py-1 rounded bg-zinc-900/60 border border-zinc-700/50 text-xs">
+                        <option value="overwrite-remote">Push (overwrite remote)</option>
+                        <option value="overwrite-local">Pull (overwrite local)</option>
+                        <option value="merge-and-push" selected>Merge (merge local & remote, push)</option>
+                    </select>
+                </div>
+
+                <div class="flex items-center gap-2">
+                    <button onclick="pushToGitHub()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-zinc-900 font-medium text-sm">Push to GitHub</button>
+                    <button onclick="pullFromGitHub()" class="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-zinc-900 font-medium text-sm">Pull from GitHub</button>
+                    <button onclick="mergeAndPush()" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-zinc-900 font-medium text-sm">Merge & Push</button>
+                    <button onclick="clearToken()" class="px-3 py-1.5 rounded-lg bg-zinc-700 hover:bg-zinc-600 text-zinc-100 text-sm">Clear Token</button>
+                </div>
+
+                <p class="mt-3 text-xs text-zinc-400">
+                    Notes: Client-side PAT usage is insecure. This client now calls a local server endpoint (/api/backup) which should perform GitHub API calls server-side (OAuth or server-stored PAT). Implement server logic to avoid exposing tokens in the browser.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* ---------------------------
+           Application data and helpers
+           --------------------------- */
+        const DEFAULT_HABITS = [
+            { id: 0, name: "Deep Work / Coding", icon: "⚡" },
+            { id: 1, name: "Physical Training", icon: "🔥" },
+            { id: 2, name: "Read 30 Pages", icon: "📖" },
+            { id: 3, name: "Hydration & Nutrition", icon: "💧" },
+            { id: 4, name: "Mindful Meditation", icon: "🧘" }
+        ];
+        const STORAGE_KEY_LOGS = "habit_tracker_logs_v1";
+        const BACKUP_VERSION = "habit_tracker_v1";
+
+        function formatDateKey(date) {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+        const todayStr = formatDateKey(new Date());
+
+        function loadLogs() {
+            try { const data = localStorage.getItem(STORAGE_KEY_LOGS); return data ? JSON.parse(data) : {}; }
+            catch (e) { return {}; }
+        }
+        function saveLogs(logs) { localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(logs)); }
+
+        function updateHeaderDate() {
+            const options = { weekday: 'long', month: 'short', day: 'numeric' };
+            document.getElementById('current-date').textContent = new Date().toLocaleDateString('en-US', options);
+        }
+
+        // Fixed: count consecutive days from today; break on first missing day (including today)
+        function getStreak(habitId, logs) {
+            let streak = 0;
+            let currentDate = new Date();
+            for (let i = 0; i < 30; i++) {
+                const dateKey = formatDateKey(currentDate);
+                const dayLogs = logs[dateKey] || [];
+                if (!dayLogs.includes(habitId)) break;
+                streak++;
+                currentDate.setDate(currentDate.getDate() - 1);
+            }
+            return streak;
+        }
+
+        function getLast7DaysStatus(habitId, logs) {
+            const statuses = []; let curr = new Date();
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date(curr); d.setDate(curr.getDate() - i);
+                const key = formatDateKey(d); const dayLogs = logs[key] || [];
+                statuses.push({ date: key, completed: dayLogs.includes(habitId), isToday: i === 0 });
+            }
+            return statuses;
+        }
+
+        function renderApp() {
+            updateHeaderDate();
+            const logs = loadLogs();
+            const container = document.getElementById('habits-container');
+            container.innerHTML = '';
+
+            const todayLogs = logs[todayStr] || []; let completedCount = 0;
+            DEFAULT_HABITS.forEach(habit => {
+                const isCompletedToday = todayLogs.includes(habit.id);
+                if (isCompletedToday) completedCount++;
+                const streak = getStreak(habit.id, logs);
+                const past7 = getLast7DaysStatus(habit.id, logs);
+
+                const card = document.createElement('div');
+                card.className = `group relative flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition-all duration-200 ${
+                    isCompletedToday ? 'bg-zinc-800/30 border-emerald-500/30 shadow-lg shadow-emerald-950/10' : 'bg-zinc-800/20 border-zinc-800/80 hover:border-zinc-700/60'
+                }`;
+
+                let pastDaysHTML = past7.map(day => `
+                    <div class="flex flex-col items-center gap-1" title="${day.date}">
+                        <div class="w-4 h-4 rounded-sm transition-all ${
+                            day.completed ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50' : 'bg-zinc-800 border border-zinc-700/50'
+                        }"></div>
+                    </div>
+                `).join('');
+
+                card.innerHTML = `
+                    <div class="flex items-center gap-4 mb-3 sm:mb-0">
+                        <div class="w-10 h-10 rounded-xl bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center text-lg shrink-0">
+                            ${habit.icon}
+                        </div>
+                        <div>
+                            <h3 class="font-medium text-zinc-200 text-sm sm:text-base">${habit.name}</h3>
+                            <div class="flex items-center gap-3 mt-1.5">
+                                <span class="text-xs font-medium text-zinc-400 flex items-center gap-1">
+                                    <span class="text-amber-400">🔥</span> ${streak} day streak
+                                </span>
+                                <div class="hidden sm:flex items-center gap-1.5 pl-3 border-l border-zinc-800">
+                                    ${pastDaysHTML}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-end sm:justify-start">
+                        <button onclick="toggleHabit(${habit.id})" class="cursor-pointer relative flex items-center justify-center w-9 h-9 rounded-xl border transition-all duration-200 ${
+                            isCompletedToday ? 'bg-emerald-500 border-emerald-400 text-zinc-950 shadow-md shadow-emerald-500/20 animate-pop' : 'bg-zinc-800/60 border-zinc-700 text-transparent hover:border-zinc-500'
+                        }">
+                            <svg class="w-5 h-5 transition-transform duration-200 ${isCompletedToday ? 'scale-100' : 'scale-0'}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                        </button>
+                    </div>
+                `;
+
+                container.appendChild(card);
+            });
+
+            document.getElementById('completion-rate').textContent = `${completedCount}/${DEFAULT_HABITS.length} Completed`;
+        }
+
+        function toggleHabit(habitId) {
+            const logs = loadLogs();
+            if (!logs[todayStr]) logs[todayStr] = [];
+            const index = logs[todayStr].indexOf(habitId);
+            if (index > -1) logs[todayStr].splice(index, 1);
+            else logs[todayStr].push(habitId);
+            saveLogs(logs); renderApp();
+        }
+
+        /* ---------------------------
+           Export / Import (local file)
+           --------------------------- */
+        function exportData() {
+            const logs = loadLogs();
+            const backup = { version: BACKUP_VERSION, created_at: new Date().toISOString(), data: logs };
+            const dataStr = JSON.stringify(backup, null, 2);
+            const blob = new Blob([dataStr], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = `habits_backup_${BACKUP_VERSION}_${todayStr}.json`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+        }
+
+        function importData(event) {
+            const file = event.target.files[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const parsed = JSON.parse(e.target.result);
+                    let incomingData = null, detectedVersion = null;
+                    if (parsed && parsed.version && parsed.data) { incomingData = parsed.data; detectedVersion = parsed.version; }
+                    else if (parsed && typeof parsed === 'object') { incomingData = parsed; detectedVersion = 'legacy'; }
+                    else throw new Error("Invalid format");
+
+                    if (!confirm("Import will replace your current local data. Click OK to proceed or Cancel to abort.")) { return; }
+                    if (!isValidDataShape(incomingData)) { alert("Failed to import: backup file has unexpected structure."); return; }
+                    saveLogs(incomingData); renderApp(); alert(`Backup restored (${detectedVersion}).`);
+                } catch (err) { console.error(err); alert("Failed to import: Invalid backup file format."); }
+                finally { event.target.value = ''; }
+            };
+            reader.readAsText(file);
+        }
+
+        function isValidDataShape(obj) {
+            if (!obj || typeof obj !== 'object') return false;
+            const keys = Object.keys(obj);
+            for (let k of keys) {
+                const v = obj[k]; if (!Array.isArray(v)) return false;
+                for (let el of v) if (typeof el !== 'number') return false;
+            }
+            return true;
+        }
+
+        /* ---------------------------
+           GitHub-backed sync helpers (server-stubbed)
+           --------------------------- */
+        function getGhInputs() {
+            return {
+                owner: document.getElementById('gh-owner').value.trim(),
+                repo: document.getElementById('gh-repo').value.trim(),
+                path: document.getElementById('gh-path').value.trim() || 'backups/habits_backup.json',
+                token: document.getElementById('gh-token').value.trim() // kept for compatibility but NOT required
+            };
+        }
+
+        // UTF-8 safe base64 helpers using TextEncoder/TextDecoder
+        function base64EncodeUnicode(str) {
+            const bytes = new TextEncoder().encode(str);
+            // chunk to avoid apply() argument size limits
+            const chunk = 0x8000;
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += chunk) {
+                const sub = bytes.subarray(i, i + chunk);
+                binary += String.fromCharCode.apply(null, Array.from(sub));
+            }
+            return btoa(binary);
+        }
+
+        function base64DecodeUnicode(b64) {
+            const binary = atob(b64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+            return new TextDecoder().decode(bytes);
+        }
+
+        // NOTE: These call a local server endpoint (/api/backup). Implement server-side logic
+        // to perform GitHub API interactions (OAuth or server-stored PAT). The client MUST NOT
+        // hold long-lived tokens in production.
+        async function getRemoteFile(owner, repo, path /* token not used */) {
+            const res = await fetch('/api/backup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'get', owner, repo, path })
+            });
+            if (res.status === 404) return { exists: false };
+            if (!res.ok) throw new Error(`Server GET failed: ${res.status} ${res.statusText}`);
+            const json = await res.json();
+            // expected: { exists: boolean, sha?: string, content?: object }
+            return { exists: !!json.exists, sha: json.sha, content: json.content, raw: json };
+        }
+
+        async function putRemoteFile(owner, repo, path /* token not used */, contentStr, sha = null, message = "Update habit backup") {
+            const res = await fetch('/api/backup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'put', owner, repo, path, content: contentStr, sha, message })
+            });
+            if (!res.ok) {
+                const txt = await res.text();
+                throw new Error(`Server PUT failed: ${res.status} ${res.statusText} — ${txt}`);
+            }
+            return await res.json();
+        }
+
+        function mergeLogs(local, remote) {
+            const merged = {};
+            const keys = new Set([ ...Object.keys(local || {}), ...Object.keys(remote || {}) ]);
+            for (let k of keys) {
+                const la = Array.isArray(local[k]) ? local[k] : [];
+                const ra = Array.isArray(remote[k]) ? remote[k] : [];
+                const set = new Set([ ...la, ...ra ]);
+                merged[k] = Array.from(set).sort((a,b) => a - b);
+            }
+            return merged;
+        }
+
+        async function pushToGitHub() {
+            const { owner, repo, path } = getGhInputs(); if (!owner || !repo || !path) { alert("Please fill owner, repo and path."); return; }
+            try {
+                const localLogs = loadLogs(); const backup = { version: BACKUP_VERSION, created_at: new Date().toISOString(), data: localLogs }; const contentStr = JSON.stringify(backup, null, 2);
+                let remote = null; try { remote = await getRemoteFile(owner, repo, path); } catch (err) { /* ignore */ }
+                if (remote && remote.exists) {
+                    if (!confirm("Remote file exists. Overwrite remote with local backup?")) return;
+                    await putRemoteFile(owner, repo, path, contentStr, remote.sha, `habit-tracker: overwrite backup ${new Date().toISOString()}`);
+                    alert("Pushed local backup and overwrote remote.");
+                } else {
+                    await putRemoteFile(owner, repo, path, contentStr, null, `habit-tracker: create backup ${new Date().toISOString()}`);
+                    alert("Pushed local backup and created remote file.");
+                }
+            } catch (err) { console.error(err); alert(`Push failed: ${err.message}`); }
+        }
+
+        async function pullFromGitHub() {
+            const { owner, repo, path } = getGhInputs(); if (!owner || !repo || !path) { alert("Please fill owner, repo and path."); return; }
+            try {
+                const remote = await getRemoteFile(owner, repo, path);
+                if (!remote.exists) { alert("Remote backup not found."); return; }
+                const remoteData = remote.content && remote.content.data ? remote.content.data : (remote.content || {});
+                if (!confirm("Pull will replace your local data. OK to proceed?")) return;
+                if (!isValidDataShape(remoteData)) { alert("Remote backup has unexpected structure."); return; }
+                saveLogs(remoteData); renderApp(); alert("Local data replaced with remote backup.");
+            } catch (err) { console.error(err); alert(`Pull failed: ${err.message}`); }
+        }
+
+        async function mergeAndPush() {
+            const { owner, repo, path } = getGhInputs(); if (!owner || !repo || !path) { alert("Please fill owner, repo and path."); return; }
+            try {
+                const localLogs = loadLogs();
+                let remote = null; try { remote = await getRemoteFile(owner, repo, path); } catch (err) { /* ignore */ }
+                const remoteData = (remote && remote.exists && remote.content && remote.content.data) ? remote.content.data : (remote && remote.exists ? remote.content : {});
+                const merged = mergeLogs(localLogs, remoteData);
+                // If union grows unusually large for any date, warn
+                for (const k of Object.keys(merged)) {
+                    if (merged[k].length > DEFAULT_HABITS.length) {
+                        if (!confirm(`Merged date ${k} has ${merged[k].length} items (more than known habits). Continue?`)) return;
+                    }
+                }
+                const backup = { version: BACKUP_VERSION, created_at: new Date().toISOString(), data: merged };
+                const contentStr = JSON.stringify(backup, null, 2);
+                const sha = (remote && remote.exists) ? remote.sha : null;
+                await putRemoteFile(owner, repo, path, contentStr, sha, `habit-tracker: merged backup ${new Date().toISOString()}`);
+                saveLogs(merged); renderApp(); alert("Merged local & remote, pushed merged backup.");
+            } catch (err) { console.error(err); alert(`Merge & Push failed: ${err.message}`); }
+        }
+
+        function clearToken() { document.getElementById('gh-token').value = ''; alert('Token input cleared.'); }
+
+        // initial render
+        renderApp();
+    </script>
+</body>
+</html>
