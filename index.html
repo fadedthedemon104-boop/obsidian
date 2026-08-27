@@ -78,6 +78,7 @@
 
                 <p class="mt-3 text-xs text-zinc-400">
                     Notes: Client-side PAT usage is insecure. This client now calls a local server endpoint (/api/backup) which should perform GitHub API calls server-side (OAuth or server-stored PAT). Implement server logic to avoid exposing tokens in the browser.
+                    Notes: Client-side PAT usage is insecure. Prefer a small backend / OAuth app to avoid exposing tokens. The code below uses GitHub's contents API to create/update a file in the given repo/path.
                 </p>
             </div>
         </div>
@@ -125,6 +126,13 @@
                 const dayLogs = logs[dateKey] || [];
                 if (!dayLogs.includes(habitId)) break;
                 streak++;
+        function getStreak(habitId, logs) {
+            let streak = 0; let currentDate = new Date();
+            for (let i = 0; i < 30; i++) {
+                const dateKey = formatDateKey(currentDate);
+                const dayLogs = logs[dateKey] || [];
+                if (dayLogs.includes(habitId)) streak++;
+                else { if (i !== 0) break; }
                 currentDate.setDate(currentDate.getDate() - 1);
             }
             return streak;
@@ -254,7 +262,7 @@
         }
 
         /* ---------------------------
-           GitHub-backed sync helpers (server-stubbed)
+           GitHub-backed sync helpers
            --------------------------- */
         function getGhInputs() {
             return {
@@ -338,15 +346,25 @@
                     alert("Pushed local backup and overwrote remote.");
                 } else {
                     await putRemoteFile(owner, repo, path, contentStr, null, `habit-tracker: create backup ${new Date().toISOString()}`);
+            const { owner, repo, path, token } = getGhInputs(); if (!owner || !repo || !path || !token) { alert("Please fill owner, repo, path and token."); return; }
+            try {
+                const localLogs = loadLogs(); const backup = { version: BACKUP_VERSION, created_at: new Date().toISOString(), data: localLogs }; const contentStr = JSON.stringify(backup, null, 2);
+                let remote = null; try { remote = await getRemoteFile(owner, repo, path, token); } catch (err) { /* ignore */ }
+                if (remote && remote.exists) {
+                    if (!confirm("Remote file exists. Overwrite remote with local backup?")) return;
+                    await putRemoteFile(owner, repo, path, token, contentStr, remote.sha, `habit-tracker: overwrite backup ${new Date().toISOString()}`);
+                    alert("Pushed local backup and overwrote remote.");
+                } else {
+                    await putRemoteFile(owner, repo, path, token, contentStr, null, `habit-tracker: create backup ${new Date().toISOString()}`);
                     alert("Pushed local backup and created remote file.");
                 }
             } catch (err) { console.error(err); alert(`Push failed: ${err.message}`); }
         }
 
         async function pullFromGitHub() {
-            const { owner, repo, path } = getGhInputs(); if (!owner || !repo || !path) { alert("Please fill owner, repo and path."); return; }
+            const { owner, repo, path, token } = getGhInputs(); if (!owner || !repo || !path || !token) { alert("Please fill owner, repo, path and token."); return; }
             try {
-                const remote = await getRemoteFile(owner, repo, path);
+                const remote = await getRemoteFile(owner, repo, path, token);
                 if (!remote.exists) { alert("Remote backup not found."); return; }
                 const remoteData = remote.content && remote.content.data ? remote.content.data : (remote.content || {});
                 if (!confirm("Pull will replace your local data. OK to proceed?")) return;
@@ -372,6 +390,7 @@
                 const contentStr = JSON.stringify(backup, null, 2);
                 const sha = (remote && remote.exists) ? remote.sha : null;
                 await putRemoteFile(owner, repo, path, contentStr, sha, `habit-tracker: merged backup ${new Date().toISOString()}`);
+                await putRemoteFile(owner, repo, path, token, contentStr, sha, `habit-tracker: merged backup ${new Date().toISOString()}`);
                 saveLogs(merged); renderApp(); alert("Merged local & remote, pushed merged backup.");
             } catch (err) { console.error(err); alert(`Merge & Push failed: ${err.message}`); }
         }
