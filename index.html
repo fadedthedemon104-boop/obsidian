@@ -77,6 +77,7 @@
                 </div>
 
                 <p class="mt-3 text-xs text-zinc-400">
+                    Notes: Client-side PAT usage is insecure. This client now calls a local server endpoint (/api/backup) which should perform GitHub API calls server-side (OAuth or server-stored PAT). Implement server logic to avoid exposing tokens in the browser.
                     Notes: Client-side PAT usage is insecure. Prefer a small backend / OAuth app to avoid exposing tokens. The code below uses GitHub's contents API to create/update a file in the given repo/path.
                 </p>
             </div>
@@ -116,6 +117,15 @@
             document.getElementById('current-date').textContent = new Date().toLocaleDateString('en-US', options);
         }
 
+        // Fixed: count consecutive days from today; break on first missing day (including today)
+        function getStreak(habitId, logs) {
+            let streak = 0;
+            let currentDate = new Date();
+            for (let i = 0; i < 30; i++) {
+                const dateKey = formatDateKey(currentDate);
+                const dayLogs = logs[dateKey] || [];
+                if (!dayLogs.includes(habitId)) break;
+                streak++;
         function getStreak(habitId, logs) {
             let streak = 0; let currentDate = new Date();
             for (let i = 0; i < 30; i++) {
@@ -259,35 +269,56 @@
                 owner: document.getElementById('gh-owner').value.trim(),
                 repo: document.getElementById('gh-repo').value.trim(),
                 path: document.getElementById('gh-path').value.trim() || 'backups/habits_backup.json',
-                token: document.getElementById('gh-token').value.trim()
+                token: document.getElementById('gh-token').value.trim() // kept for compatibility but NOT required
             };
         }
 
-        function base64EncodeUnicode(str) { return btoa(unescape(encodeURIComponent(str))); }
-        function base64DecodeUnicode(b64) { return decodeURIComponent(escape(atob(b64))); }
-
-        async function getRemoteFile(owner, repo, path, token) {
-            const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
-            const res = await fetch(url, { headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json' } });
-            if (res.status === 404) return { exists: false };
-            if (!res.ok) throw new Error(`GitHub GET failed: ${res.status} ${res.statusText}`);
-            const json = await res.json();
-            const content = json.content ? JSON.parse(base64DecodeUnicode(json.content)) : null;
-            return { exists: true, sha: json.sha, content, raw: json };
+        // UTF-8 safe base64 helpers using TextEncoder/TextDecoder
+        function base64EncodeUnicode(str) {
+            const bytes = new TextEncoder().encode(str);
+            // chunk to avoid apply() argument size limits
+            const chunk = 0x8000;
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += chunk) {
+                const sub = bytes.subarray(i, i + chunk);
+                binary += String.fromCharCode.apply(null, Array.from(sub));
+            }
+            return btoa(binary);
         }
 
-        async function putRemoteFile(owner, repo, path, token, contentStr, sha = null, message = "Update habit backup") {
-            const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
-            const body = { message, content: base64EncodeUnicode(contentStr), committer: { name: "Habit Tracker", email: "noreply@example.com" } };
-            if (sha) body.sha = sha;
-            const res = await fetch(url, {
-                method: 'PUT',
-                headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
+        function base64DecodeUnicode(b64) {
+            const binary = atob(b64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+            return new TextDecoder().decode(bytes);
+        }
+
+        // NOTE: These call a local server endpoint (/api/backup). Implement server-side logic
+        // to perform GitHub API interactions (OAuth or server-stored PAT). The client MUST NOT
+        // hold long-lived tokens in production.
+        async function getRemoteFile(owner, repo, path /* token not used */) {
+            const res = await fetch('/api/backup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'get', owner, repo, path })
+            });
+            if (res.status === 404) return { exists: false };
+            if (!res.ok) throw new Error(`Server GET failed: ${res.status} ${res.statusText}`);
+            const json = await res.json();
+            // expected: { exists: boolean, sha?: string, content?: object }
+            return { exists: !!json.exists, sha: json.sha, content: json.content, raw: json };
+        }
+
+        async function putRemoteFile(owner, repo, path /* token not used */, contentStr, sha = null, message = "Update habit backup") {
+            const res = await fetch('/api/backup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'put', owner, repo, path, content: contentStr, sha, message })
             });
             if (!res.ok) {
                 const txt = await res.text();
-                throw new Error(`GitHub PUT failed: ${res.status} ${res.statusText} — ${txt}`);
+                throw new Error(`Server PUT failed: ${res.status} ${res.statusText} — ${txt}`);
             }
             return await res.json();
         }
@@ -305,6 +336,16 @@
         }
 
         async function pushToGitHub() {
+            const { owner, repo, path } = getGhInputs(); if (!owner || !repo || !path) { alert("Please fill owner, repo and path."); return; }
+            try {
+                const localLogs = loadLogs(); const backup = { version: BACKUP_VERSION, created_at: new Date().toISOString(), data: localLogs }; const contentStr = JSON.stringify(backup, null, 2);
+                let remote = null; try { remote = await getRemoteFile(owner, repo, path); } catch (err) { /* ignore */ }
+                if (remote && remote.exists) {
+                    if (!confirm("Remote file exists. Overwrite remote with local backup?")) return;
+                    await putRemoteFile(owner, repo, path, contentStr, remote.sha, `habit-tracker: overwrite backup ${new Date().toISOString()}`);
+                    alert("Pushed local backup and overwrote remote.");
+                } else {
+                    await putRemoteFile(owner, repo, path, contentStr, null, `habit-tracker: create backup ${new Date().toISOString()}`);
             const { owner, repo, path, token } = getGhInputs(); if (!owner || !repo || !path || !token) { alert("Please fill owner, repo, path and token."); return; }
             try {
                 const localLogs = loadLogs(); const backup = { version: BACKUP_VERSION, created_at: new Date().toISOString(), data: localLogs }; const contentStr = JSON.stringify(backup, null, 2);
@@ -333,10 +374,10 @@
         }
 
         async function mergeAndPush() {
-            const { owner, repo, path, token } = getGhInputs(); if (!owner || !repo || !path || !token) { alert("Please fill owner, repo, path and token."); return; }
+            const { owner, repo, path } = getGhInputs(); if (!owner || !repo || !path) { alert("Please fill owner, repo and path."); return; }
             try {
                 const localLogs = loadLogs();
-                let remote = null; try { remote = await getRemoteFile(owner, repo, path, token); } catch (err) { /* ignore */ }
+                let remote = null; try { remote = await getRemoteFile(owner, repo, path); } catch (err) { /* ignore */ }
                 const remoteData = (remote && remote.exists && remote.content && remote.content.data) ? remote.content.data : (remote && remote.exists ? remote.content : {});
                 const merged = mergeLogs(localLogs, remoteData);
                 // If union grows unusually large for any date, warn
@@ -348,6 +389,7 @@
                 const backup = { version: BACKUP_VERSION, created_at: new Date().toISOString(), data: merged };
                 const contentStr = JSON.stringify(backup, null, 2);
                 const sha = (remote && remote.exists) ? remote.sha : null;
+                await putRemoteFile(owner, repo, path, contentStr, sha, `habit-tracker: merged backup ${new Date().toISOString()}`);
                 await putRemoteFile(owner, repo, path, token, contentStr, sha, `habit-tracker: merged backup ${new Date().toISOString()}`);
                 saveLogs(merged); renderApp(); alert("Merged local & remote, pushed merged backup.");
             } catch (err) { console.error(err); alert(`Merge & Push failed: ${err.message}`); }
