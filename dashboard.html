@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pulseboard — public data dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #080b12; color: #e5e7eb; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    .panel { background: rgba(17, 24, 39, .78); border: 1px solid #263247; }
+    .muted { color: #94a3b8; }
+    .glow { box-shadow: 0 0 60px rgba(59, 130, 246, .12); }
+  </style>
+</head>
+<body>
+  <main class="mx-auto max-w-7xl px-4 py-8 sm:px-8">
+    <header class="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+      <div>
+        <p class="mb-2 text-xs font-bold uppercase tracking-[.3em] text-blue-400">Pulseboard / public data</p>
+        <h1 class="text-4xl font-black tracking-tight sm:text-5xl">A calmer view of the open web.</h1>
+        <p class="mt-3 max-w-2xl muted">Social activity, dating-style profiles, and exchange rates in one responsive dashboard.</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="status" class="rounded-full border border-slate-700 px-3 py-2 text-xs muted">Ready</span>
+        <button id="refresh" class="rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-400">Refresh all</button>
+      </div>
+    </header>
+
+    <section class="mb-6 grid gap-4 md:grid-cols-3">
+      <article class="panel glow rounded-2xl p-5"><p class="text-sm muted">Social posts</p><p id="social-count" class="mt-2 text-3xl font-black">—</p><p class="mt-1 text-xs text-emerald-400">JSONPlaceholder demo feed</p></article>
+      <article class="panel glow rounded-2xl p-5"><p class="text-sm muted">Profiles nearby</p><p id="dating-count" class="mt-2 text-3xl font-black">—</p><p class="mt-1 text-xs text-pink-400">Random User demo profiles</p></article>
+      <article class="panel glow rounded-2xl p-5"><p class="text-sm muted">EUR → USD</p><p id="rate" class="mt-2 text-3xl font-black">—</p><p id="rate-date" class="mt-1 text-xs text-amber-400">Frankfurter market reference</p></article>
+    </section>
+
+    <section class="grid gap-6 xl:grid-cols-[1.25fr_1fr]">
+      <article class="panel rounded-2xl p-5">
+        <div class="mb-4 flex items-center justify-between"><div><h2 class="text-xl font-bold">Social pulse</h2><p class="text-sm muted">Sample posts from a public placeholder API</p></div><span class="rounded-lg bg-slate-800 px-2 py-1 text-xs">LIVE DEMO</span></div>
+        <div id="posts" class="space-y-3"><p class="muted">Loading posts…</p></div>
+      </article>
+      <article class="panel rounded-2xl p-5">
+        <div class="mb-4"><h2 class="text-xl font-bold">Discover people</h2><p class="text-sm muted">Dating-style sample cards; not a dating service.</p></div>
+        <div id="profiles" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1"><p class="muted">Loading profiles…</p></div>
+      </article>
+    </section>
+
+    <section class="panel mt-6 rounded-2xl p-5">
+      <div class="mb-4 flex flex-wrap items-end justify-between gap-3"><div><h2 class="text-xl font-bold">Money snapshot</h2><p class="text-sm muted">Reference conversion rates from Frankfurter. No payments or transfers are performed.</p></div><label class="text-sm muted">Base <select id="base" class="ml-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-white"><option>EUR</option><option>USD</option><option>GBP</option><option>JPY</option></select></label></div>
+      <div id="currencies" class="grid gap-3 sm:grid-cols-3"><p class="muted">Loading rates…</p></div>
+    </section>
+
+    <footer class="mt-8 text-xs muted">Sources: JSONPlaceholder, Random User, and Frankfurter. Public demo data can be unavailable or change; never use this dashboard for financial decisions.</footer>
+  </main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = value => String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+async function json(url) { const r = await fetch(url); if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); }
+function renderPosts(posts) { $('social-count').textContent = posts.length; $('posts').innerHTML = posts.slice(0, 6).map(p => `<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="mb-2 flex items-center justify-between"><b class="text-blue-300">@user${p.userId}</b><span class="text-xs muted">#${p.id}</span></div><h3 class="font-semibold">${esc(p.title)}</h3><p class="mt-1 text-sm muted">${esc(p.body)}</p></div>`).join(''); }
+function renderProfiles(data) { $('dating-count').textContent = data.results.length; $('profiles').innerHTML = data.results.slice(0, 4).map(p => `<div class="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3"><img class="h-14 w-14 rounded-full" src="${esc(p.picture.medium)}" alt="" loading="lazy"><div><b>${esc(p.name.first)} ${esc(p.name.last)}</b><p class="text-sm muted">${esc(p.location.city)}, ${esc(p.location.country)}</p><p class="text-xs text-pink-300">${esc(p.dob.age)} · sample profile</p></div></div>`).join(''); }
+function renderMoney(data, base) { const entries = Object.entries(data.rates || {}); $('rate').textContent = base === 'EUR' && data.rates?.USD ? Number(data.rates.USD).toFixed(4) : 'Updated'; $('rate-date').textContent = `${data.date || 'latest'} · base ${base}`; $('currencies').innerHTML = entries.slice(0, 6).map(([currency, value]) => `<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><p class="text-sm muted">1 ${esc(base)} → ${esc(currency)}</p><p class="mt-1 text-2xl font-bold">${Number(value).toFixed(4)}</p></div>`).join(''); }
+async function refresh() { $('status').textContent = 'Fetching…'; $('refresh').disabled = true; try { const base = $('base').value; const [posts, profiles, money] = await Promise.all([json('https://jsonplaceholder.typicode.com/posts'), json('https://randomuser.me/api/?results=4&nat=us,ca,gb'), json(`https://api.frankfurter.app/latest?from=${base}`)]); renderPosts(posts); renderProfiles(profiles); renderMoney(money, base); $('status').textContent = `Updated ${new Date().toLocaleTimeString()}`; } catch (e) { $('status').textContent = 'Some data unavailable'; console.error(e); } finally { $('refresh').disabled = false; } }
+$('refresh').addEventListener('click', refresh); $('base').addEventListener('change', refresh); refresh();
+</script>
+</body>
+</html>
