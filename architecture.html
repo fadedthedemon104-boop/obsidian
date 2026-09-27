@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Architecture — Minimal Habit Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+  </script>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:#0b0b0d; color:#e6e6e6; padding:24px; }
+    .container { max-width:1100px; margin:0 auto; }
+    .card { background: rgba(41,41,46,0.4); border: 1px solid rgba(80,80,86,0.35); border-radius:12px; padding:18px; margin-bottom:18px; }
+    h1,h2 { color:#fff; }
+    pre { background: #0d1117; padding:12px; border-radius:8px; overflow:auto; color:#c9d1d9; }
+    .controls { display:flex; gap:8px; margin-top:8px; }
+    button { background:#2563eb; color:white; border:none; padding:8px 10px; border-radius:6px; cursor:pointer; }
+    button.secondary { background:#6b7280; }
+    .note { color:#9ca3af; font-size:14px; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Minimal Habit Tracker — Architecture & Sync Design</h1>
+
+    <div class="card">
+      <h2>Overview (flowchart)</h2>
+      <div class="mermaid" id="architecture-flow">
+flowchart LR
+  subgraph Browser
+    UI[UI Layer<br/>index.html] 
+    User[User Interaction<br/>(click / import / export)]
+  end
+
+  subgraph AppLogic
+    Renderer[Renderer<br/>(renderApp)]
+    Toggler[Toggle Handler<br/>(toggleHabit)]
+    DateSvc[Date Utilities<br/>(formatDateKey)]
+    StreakSvc[Streak Calculator<br/>(getStreak)]
+    ExportImport[Export/Import Module]
+    SyncClient[Sync Client<br/>(GitHub or Cloud API)]
+  end
+
+  subgraph Persistence
+    LocalStore[LocalStorage<br/>(habit_tracker_logs_v1)]
+    BackupFile[Backup (.json)]
+    RemoteStore[(Cloud Backup / GitHub)]
+  end
+
+  User --> UI
+  UI --> Renderer
+  Renderer --> LocalStore
+  Renderer --> StreakSvc
+  Toggler --> Renderer
+  UI --> ExportImport
+  ExportImport --> BackupFile
+  SyncClient --> RemoteStore
+  LocalStore -. sync .-> SyncClient
+      </div>
+
+      <div class="controls">
+        <button onclick="renderMermaid('architecture-flow')">Render Diagram</button>
+        <button onclick="exportSVG('architecture-flow')" class="secondary">Export SVG</button>
+      </div>
+      <p class="note">Click "Render Diagram" after opening this file locally or when hosted; use "Export SVG" to download the rendered SVG.</p>
+    </div>
+
+    <div class="card">
+      <h2>Sequence: Toggle Habit (user clicks a habit)</h2>
+      <div class="mermaid" id="seq-toggle">
+sequenceDiagram
+  participant U as User (browser)
+  participant UI as UI Renderer
+  participant LS as LocalStorage
+  participant DOM as DOM
+
+  U->>UI: click toggle button
+  UI->>LS: loadLogs()
+  LS-->>UI: logs object
+  UI->>LS: update logs[today] (add/remove habitId)
+  UI->>LS: saveLogs(updated)
+  UI->>DOM: renderApp() (rebuild cards, update completion)
+  DOM-->>U: visual feedback (animation)
+      </div>
+
+      <div class="controls">
+        <button onclick="renderMermaid('seq-toggle')">Render Sequence</button>
+        <button onclick="exportSVG('seq-toggle')" class="secondary">Export SVG</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Sequence: Cloud Sync (merge & push)</h2>
+      <div class="mermaid" id="seq-sync">
+sequenceDiagram
+  participant U as User (browser)
+  participant App as App (browser)
+  participant API as Sync API (backend or GitHub)
+  participant Remote as Remote (Cloud Storage / GitHub repo)
+
+  U->>App: Click "Merge & Push"
+  App->>API: GET /backup (fetch remote file+sha)
+  API-->>App: 200 { backup, sha } OR 404
+  App->>App: mergeLogs(local, remote) // union by date keys
+  App->>API: PUT /backup (new content, include previous sha if updating)
+  API-->>Remote: create/update file (commit)
+  API-->>App: 201/200 Success
+  App->>U: notify success/failure
+      </div>
+
+      <div class="controls">
+        <button onclick="renderMermaid('seq-sync')">Render Sequence</button>
+        <button onclick="exportSVG('seq-sync')" class="secondary">Export SVG</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Cloud-Sync Design (suggested)</h2>
+      <p class="note">Prefer a small backend to avoid exposing Personal Access Tokens in client code. Below are suggested endpoints and behaviors.</p>
+
+      <h3>Recommended API endpoints (REST)</h3>
+      <pre>
+GET  /api/v1/backups/:userId?path=backups/habits.json
+  - Returns: 200 { version, created_at, data } OR 404
+
+PUT  /api/v1/backups/:userId?path=backups/habits.json
+  - Body: { version, created_at, data }
+  - If file exists: use If-Match / ETag for concurrency or provide lastSha in body.
+  - Returns: 200 { ok, commitSha } or 201 created
+
+POST /api/v1/backups/:userId/merge
+  - Body: { client: { version, data }, mode: "merge|force" }
+  - Server merges with remote using union-by-date or custom strategy; returns merged object and commit info.
+      </pre>
+
+      <h3>Auth & Security</h3>
+      <ul>
+        <li>Use OAuth (GitHub app) or server-side Personal Access Token stored securely — never store PATs in client web apps.</li>
+        <li>Authenticate users with JWT/session; backend performs GitHub API calls on behalf of user.</li>
+        <li>Use ETags or commit SHA to detect concurrent updates and prevent accidental overwrites.</li>
+      </ul>
+
+      <h3>Conflict resolution strategy</h3>
+      <ol>
+        <li>Default: Merge by date key — union of habit IDs per date (idempotent & simple).</li>
+        <li>If both sides modified the same date and the union produces &gt;X items or unexpected values, present a human-readable diff and require manual resolution.</li>
+        <li>Keep a server-side history (commits) to allow rollback.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>Local file format & migration</h2>
+      <pre>
+{
+  "version": "habit_tracker_v1",
+  "created_at": "2026-08-14T12:00:00Z",
+  "data": {
+    "2026-08-14": [0,2,4],
+    "2026-08-13": [0,1,2,4]
+  }
+}
+      </pre>
+      <p class="note">Future versions can bump "version" and include migration notes. The server can store multiple versions or auto-migrate on PUT.</p>
+    </div>
+
+    <div class="card">
+      <h2>Exported SVG for diagrams</h2>
+      <p class="note">Each rendered Mermaid diagram above can be exported to SVG using the "Export SVG" button. If you prefer, I can pre-render SVGs and add them to the repo as static files (architecture-diagram.svg, sequence-toggle.svg, sequence-sync.svg).</p>
+      <div class="controls">
+        <button onclick="renderAll()">Render All Diagrams</button>
+        <button onclick="downloadAllSVG()" class="secondary">Download All SVGs (zipped)</button>
+      </div>
+      <p class="note">Note: "Download All" will attempt to generate three SVGs in the browser and trigger downloads. It does not create a zip file on the server; browser-only zipping is possible but not included here unless requested.</p>
+    </div>
+
+    <div class="card">
+      <h2>Next steps before commit</h2>
+      <ol>
+        <li>Confirm I should commit <strong>index.html</strong> and this <strong>architecture.html</strong> to branch <em>ARC</em> in fadedthedemon104-boop/obsidian.</li>
+        <li>If you want pre-generated SVG files added to the repo, say "Add SVGs" and I'll include them in the commit.</li>
+        <li>If you prefer a server-side sync implementation, I can draft a small Node/Express service (with example GitHub app/OAuth flow) and add it as a new folder.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    // Simple helpers to render Mermaid blocks and export to SVG
+    async function renderMermaid(id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const graphDefinition = el.textContent;
+      try {
+        const { svg } = await mermaid.render(id + '-svg', graphDefinition);
+        el.innerHTML = svg;
+      } catch (err) {
+        el.innerHTML = '<pre style="color:#f87171">Error rendering diagram: ' + (err.message || err) + '</pre>';
+      }
+    }
+
+    async function renderAll() {
+      await renderMermaid('architecture-flow');
+      await renderMermaid('seq-toggle');
+      await renderMermaid('seq-sync');
+    }
+
+    async function exportSVG(id) {
+      const svgEl = document.getElementById(id + '-svg');
+      if (!svgEl) { await renderMermaid(id); }
+      const svgContainer = document.getElementById(id + '-svg');
+      if (!svgContainer) { alert('SVG not rendered yet. Click "Render" first.'); return; }
+      const svg = svgContainer.outerHTML;
+      const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = id + '.svg';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    }
+
+    async function downloadAllSVG() {
+      const ids = ['architecture-flow','seq-toggle','seq-sync'];
+      for (const id of ids) { await renderMermaid(id); await exportSVG(id); }
+    }
+  </script>
+</body>
+</html>
